@@ -127,7 +127,7 @@ def checkTemporalConstraintViolation(model, A, S, Aux, x, y, v, d, temporal_cons
                 c_index += 1
             time += epsilon
         if interval[1] >= 0.0:
-            return t, f, interval, violated_constraint_index
+            return t, interval, violated_constraint_index
 
     return -1, [-1.0*epsilon, -1.0*epsilon], -1
 
