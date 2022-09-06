@@ -14,7 +14,7 @@ i) Solver: SCIP (the current implementation uses the python interface to the SCI
 
 ## Running SCIPPlan
 
-scipplan.py -d domain -i instance -h horizon -e epsilon -g gap
+python scipplan.py -d domain -i instance -h horizon -e epsilon -g gap
 
 Example: python scipplan.py -d navigation -i 10x10 -h 2 -e 0.1
 
