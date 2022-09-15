@@ -1,0 +1,5 @@
+susceptible,==,500.0
+infected,==,1
+exposed,==,0
+recovered,==,0
+confinement,==,0

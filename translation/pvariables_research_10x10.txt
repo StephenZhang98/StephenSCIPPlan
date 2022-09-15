@@ -1,0 +1,1 @@
+action_continuous: dt,state_continuous: confinement,state_continuous: susceptible,state_continuous: infected,state_continuous: exposed,state_continuous: recovered,action_boolean: dc

@@ -1,0 +1,5 @@
+susceptible',-1.0*susceptible,1.416*susceptible*infected*dt,0.095*susceptible*dt*dc,-0.003*confinement*dt,==,0.0
+exposed',-1.0*exposed,-1.416*susceptible*infected*dt,0.167*exposed*dt,==,0.0
+infected',-1.0*infected,-0.167*exposed*dt,0.048*infected*dt,==,0.0
+confinement',-1.0*confinement,-0.095*susceptible*dt*dc,0.003*confinement*dt,==,0.0
+recovered',-1.0*recovered,-0.048*infected*dt,==,0.0
