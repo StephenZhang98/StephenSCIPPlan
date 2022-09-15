@@ -1,5 +1,5 @@
 import math
-
+import re
 from pyscipopt import Model, sqrt, log, exp
 from pyscipopt.scip import Expr, VarExpr, SumExpr, ProdExpr, quicksum #, GenExpr, ExprCons, Term
 
@@ -8,7 +8,7 @@ def encode_scipplan(domain, instance, horizon, epsilon, gap):
     bigM = 1000.0
     
     model = Model(domain + "_" + instance + "_" + str(horizon))
-    
+    #print("model: ", model)
     initials = readConstraintFiles("./translation/initial_" + domain + "_" + instance+".txt")
     instantaneous_constraints = readConstraintFiles("./translation/instantaneous_constraints_" + domain + "_" + instance+".txt")
     temporal_constraints = readConstraintFiles("./translation/temporal_constraints_" + domain + "_" + instance+".txt")
@@ -28,13 +28,15 @@ def encode_scipplan(domain, instance, horizon, epsilon, gap):
     model = encode_reward(model, A, S, Aux, x, y, v, d, reward, horizon)
     
     for t in range(horizon):
-        model.addCons(x[("dt",t)] >= 0.0)
+        print(t)
         model.addCons(x[("dt",t)] <= bigM)
         
     model.setRealParam("limits/gap", gap)
+    print(gap)
     
     while True:
         model.optimize()
+        print("solution: ", model.getSols())
         if len(model.getSols()) == 0:
             print("Problem is infeasible for the given horizon.")
             return False
@@ -50,6 +52,9 @@ def encode_scipplan(domain, instance, horizon, epsilon, gap):
     for t in range(horizon):
         for index, a in enumerate(A):
             print(a + " at time " + str(t) + " by value " + str(model.getVal(x[(a,t)])))
+        for index, s in enumerate(S):
+            print(s + " at time " + str(t) + " by value " + str(model.getVal(y[(s,t)])))
+    print(s + " at time " + str(horizon) + " by value " + str(model.getVal(y[(s,horizon)])))
     return True
 
 def checkTemporalConstraintViolation(model, A, S, Aux, x, y, v, d, temporal_constraints, horizon, epsilon):
@@ -61,8 +66,10 @@ def checkTemporalConstraintViolation(model, A, S, Aux, x, y, v, d, temporal_cons
     constraint_index = {}
     c_index = 0
     for index, constraint in enumerate(temporal_constraints):
+        print("index ", index, " constrain is: ",constraint,"\n")
         if "OR" in constraint:
             temp_constraints = (",".join(constraint)).split(",OR,")
+            print(temp_constraints)
             for temp_index, temp_constraint in enumerate(temp_constraints):
                 constraints.append(temp_constraint.split(","))
                 or_index[c_index] = [temp_index, len(temp_constraints)-1]
@@ -70,15 +77,18 @@ def checkTemporalConstraintViolation(model, A, S, Aux, x, y, v, d, temporal_cons
                 c_index += 1
         else:
             constraints.append(constraint)
+            print(constraints)
             or_index[c_index] = [0, 0]
             constraint_index[c_index] = index
             c_index += 1
+    #print("final constrain is ",constraints )
 
     interval = [-1.0*epsilon, -1.0*epsilon]
     violated_constraint_index = -1
 
     for t in range(horizon):
         dt_val = model.getVal(x[("dt",t)])
+        print(dt_val)
         time = 0.0
         violationFound = False
         while time <= dt_val:
@@ -99,21 +109,21 @@ def checkTemporalConstraintViolation(model, A, S, Aux, x, y, v, d, temporal_cons
                     if variables[0] not in A + S + Aux:
                         coef = variables[0]
                         variables = variables[1:]
-                    term_val = float(coef)
-                    for var in variables:
-                        if var == "dt":
-                            term_val *= time
-                        else:
-                            if var in A:
-                                term_val *= model.getVal(x[(var,t)])
-                            elif var in S:
-                                term_val *= model.getVal(y[(var,t)])
+                    if set(A).isdisjoint(variables) or t < horizon:
+                        term_val = float(coef)
+                        for var in variables:
+                            if var == "dt":
+                                term_val *= time
                             else:
-                                term_val *= model.getVal(v[(var,t)])
-                    LHS_val += term_val
+                                if var in A:
+                                    term_val *= model.getVal(x[(var,t)])
+                                elif var in S:
+                                    term_val *= model.getVal(y[(var,t)])
+                                else:
+                                    term_val *= model.getVal(v[(var,t)])
+                        LHS_val += term_val
             
-                #if ("<=" == constraint[len(constraint)-2] and LHS_val > float(constraint[len(constraint)-1])) or (">=" == constraint[len(constraint)-2] and LHS_val < float(constraint[len(constraint)-1])) or ("==" == constraint[len(constraint)-2] and (LHS_val < float(constraint[len(constraint)-1]) or LHS_val > float(constraint[len(constraint)-1]))):
-                if ("<=" == constraint[len(constraint)-2] and LHS_val > float(constraint[len(constraint)-1]) + model.feastol()) or (">=" == constraint[len(constraint)-2] and LHS_val < float(constraint[len(constraint)-1]) - model.feastol()) or ("==" == constraint[len(constraint)-2] and (LHS_val < float(constraint[len(constraint)-1]) - model.feastol() or LHS_val > float(constraint[len(constraint)-1]) + model.feastol())):
+                if ("<=" == constraint[len(constraint)-2] and LHS_val > float(constraint[len(constraint)-1])) or (">=" == constraint[len(constraint)-2] and LHS_val < float(constraint[len(constraint)-1])) or ("==" == constraint[len(constraint)-2] and (LHS_val < float(constraint[len(constraint)-1]) or LHS_val > float(constraint[len(constraint)-1]))):
                     if or_index[c_index][1] > 0:
                         num_unsat += 1
                     if num_unsat - 1 == or_index[c_index][1]:
@@ -126,8 +136,6 @@ def checkTemporalConstraintViolation(model, A, S, Aux, x, y, v, d, temporal_cons
 
                 c_index += 1
             time += epsilon
-        if interval[1] >= 0.0:
-            return t, interval, violated_constraint_index
 
     return -1, [-1.0*epsilon, -1.0*epsilon], -1
 
@@ -162,20 +170,21 @@ def encode_violated_global_temporal_constraint(model, A, S, Aux, x, y, v, d, tem
             if variables[0] not in A + S + Aux:
                 coef = float(variables[0])
                 variables = variables[1:]
-            for var in variables:
-                if var == "dt":
-                    coef *= zero_crossing_coef
+            if set(A).isdisjoint(variables) or violated_t < horizon:
+                for var in variables:
+                    if var == "dt":
+                        coef *= zero_crossing_coef
                         
-            if len(variables) > 1:
-                con_expr += coef * VarExpr(d[("Temp",violated_c_index+c_index,t_index,violated_t)])
-            else:
-                if variables[0] in A:
-                    con_expr += coef * VarExpr(x[(variables[0],violated_t)])
-                elif variables[0] in S:
-                    con_expr += coef * VarExpr(y[(variables[0],violated_t)])
+                if len(variables) > 1:
+                    con_expr += coef * VarExpr(d[("Temp",violated_c_index,t_index,violated_t)])
                 else:
-                    con_expr += coef * VarExpr(v[(variables[0],violated_t)])
-            empty = False
+                    if variables[0] in A:
+                        con_expr += coef * VarExpr(x[(variables[0],violated_t)])
+                    elif variables[0] in S:
+                        con_expr += coef * VarExpr(y[(variables[0],violated_t)])
+                    else:
+                        con_expr += coef * VarExpr(v[(variables[0],violated_t)])
+                empty = False
         
         if not empty:
             #print(con_expr)
@@ -202,7 +211,7 @@ def readConstraintFiles(directory):
             listOfConstraints.append(constraint.split(","))
     else:
         print("No file provided.")
-    
+    #print("List of constraint: ", listOfConstraints)
     return listOfConstraints
 
 def readTransitions(directory):
@@ -217,6 +226,7 @@ def readTransitions(directory):
         
         for transition in transitions:
             listOfTransitions.append(transition.split(","))
+            #print("transition: ", transition)
     else:
         print("No file provided.")
     
@@ -231,7 +241,7 @@ def readReward(directory):
     if os.path.exists(directory):
         file = open(directory,"r")
         reward = file.read().splitlines()
-        
+        #print("reward1: ", reward)
         for rew in reward:
             listOfReward.append(rew.split(","))
     else:
@@ -284,32 +294,35 @@ def readVariables(directory):
                 else:
                     Aux.append(var.replace("auxiliary_integer: ",""))
                     Aux_type.append("I")
-
+    print("A: ",A,"S: ",S,"Auz: ",Aux)
     return A, S, Aux, A_type, S_type, Aux_type
 
 def initialize_original_variables(model, A, S, Aux, A_type, S_type, Aux_type, horizon):
     
     # Create vars for each action a, time step t
+    print(horizon)
     x = {}
     for index, a in enumerate(A):
         for t in range(horizon):
-            x[(a,t)] = model.addVar(a + "_" + str(t), vtype=A_type[index], lb = None, ub = None)
+            x[(a,t)] = model.addVar(a + "_" + str(t), vtype=A_type[index])
 
     # Create vars for each state s, time step t
     y = {}
     for index, s in enumerate(S):
         for t in range(horizon+1):
-            y[(s,t)] = model.addVar(s + "_" + str(t), vtype=S_type[index], lb = None, ub = None)
+            y[(s,t)] = model.addVar(s + "_" + str(t), vtype=S_type[index])
 
     # Create vars for each auxilary variable aux, time step t
     v = {}
     for index,aux in enumerate(Aux):
-        for t in range(horizon):
-            v[(aux,t)] = model.addVar(aux + "_" + str(t), vtype=Aux_type[index], lb = None, ub = None)
+        for t in range(horizon+1):
+            v[(aux,t)] = model.addVar(aux + "_" + str(t), vtype=Aux_type[index])
 
     # Create vars for each nonlinear term n, time step t
     d = {}
-
+    #print("x: ",x)
+    #print("y: ",y)
+    #print("v: ",v)
     return model, x, y, v, d
 
 def encode_initial_constraints(model, S, y, initials):
@@ -340,14 +353,14 @@ def encode_global_instantaneous_constraints(model, A, S, Aux, x, y, v, d, instan
                     split_constraint.insert(len(split_constraint)-2, str(-1.0*bigM) + "*" + Aux[len(Aux)-1])
                 elif ">=" == split_constraint[len(split_constraint)-2]:
                     split_constraint.insert(len(split_constraint)-2, str(bigM) + "*" + Aux[len(Aux)-1])
-                for t in range(horizon):
+                for t in range(horizon+1):
                     v[(Aux[len(Aux)-1],t)] = model.addVar(Aux[len(Aux)-1] + "_" + str(t), vtype="B")
                 constraints.append(split_constraint)
             constraints.append(Aux[-1*len(temp_constraints):] + ["<=",str(len(temp_constraints)-1)])
         else:
             constraints.append(constraint)
 
-    for t in range(horizon):
+    for t in range(horizon+1):
         for c_index, constraint in enumerate(constraints):
             terms = constraint[:-2]
             con_expr = SumExpr()
@@ -358,23 +371,24 @@ def encode_global_instantaneous_constraints(model, A, S, Aux, x, y, v, d, instan
                 if variables[0] not in A + S + Aux:
                     coef = variables[0]
                     variables = variables[1:]
-                prod_expr = ProdExpr()
-                for var in variables:
-                    if var in A:
-                        prod_expr *= VarExpr(x[(var,t)])
-                    elif var in S:
-                        prod_expr *= VarExpr(y[(var,t)])
-                    else:
-                        prod_expr *= VarExpr(v[(var,t)])
+                if set(A).isdisjoint(variables) or t < horizon:
+                    prod_expr = ProdExpr()
+                    for var in variables:
+                        if var in A:
+                            prod_expr *= VarExpr(x[(var,t)])
+                        elif var in S:
+                            prod_expr *= VarExpr(y[(var,t)])
+                        else:
+                            prod_expr *= VarExpr(v[(var,t)])
                 
-                if len(variables) > 1:
-                    d[("Inst",c_index,t_index,t)] = model.addVar("cons_inst_" + str(c_index) + "_" + str(t_index) + "_" + str(t), vtype="C", lb = None, ub = None)
-                    model.addCons(prod_expr == d[("Inst",c_index,t_index,t)])
+                    if len(variables) > 1:
+                        d[("Inst",c_index,t_index,t)] = model.addVar("cons_inst_" + str(c_index) + "_" + str(t_index) + "_" + str(t))
+                        model.addCons(prod_expr == d[("Inst",c_index,t_index,t)])
 
-                    con_expr += float(coef) * d[("Inst",c_index,t_index,t)]
-                else:
-                    con_expr += float(coef) * prod_expr
-                empty = False
+                        con_expr += float(coef) * d[("Inst",c_index,t_index,t)]
+                    else:
+                        con_expr += float(coef) * prod_expr
+                    empty = False
             
             if not empty:
                 #print(con_expr)
@@ -400,14 +414,14 @@ def encode_global_temporal_constraints(model, A, S, Aux, x, y, v, d, temporal_co
                     split_constraint.insert(len(split_constraint)-2, str(-1.0*bigM) + "*" + Aux[len(Aux)-1])
                 elif ">=" == split_constraint[len(split_constraint)-2]:
                     split_constraint.insert(len(split_constraint)-2, str(bigM) + "*" + Aux[len(Aux)-1])
-                for t in range(horizon):
+                for t in range(horizon+1):
                     v[(Aux[len(Aux)-1],t)] = model.addVar(Aux[len(Aux)-1] + "_" + str(t), vtype="B")
                 constraints.append(split_constraint)
             constraints.append(Aux[-1*len(temp_constraints):] + ["<=",str(len(temp_constraints)-1)])
         else:
             constraints.append(constraint)
     
-    for t in range(horizon):
+    for t in range(horizon+1):
         for c_index, constraint in enumerate(constraints):
             terms = constraint[:-2]
             con_expr = SumExpr()
@@ -418,23 +432,23 @@ def encode_global_temporal_constraints(model, A, S, Aux, x, y, v, d, temporal_co
                 if variables[0] not in A + S + Aux:
                     coef = variables[0]
                     variables = variables[1:]
-                prod_expr = ProdExpr()
-                for var in variables:
-                    if var in A:
-                        prod_expr *= VarExpr(x[(var,t)])
-                    elif var in S:
-                        prod_expr *= VarExpr(y[(var,t)])
-                    else:
-                        prod_expr *= VarExpr(v[(var,t)])
-                
-                if len(variables) > 1:
-                    d[("Temp",c_index,t_index,t)] = model.addVar("cons_temp_" + str(c_index) + "_" + str(t_index) + "_" + str(t), vtype="C", lb = None, ub = None)
-                    model.addCons(prod_expr == d[("Temp",c_index,t_index,t)])
+                if set(A).isdisjoint(variables) or t < horizon:
+                    prod_expr = ProdExpr()
+                    for var in variables:
+                        if var in A:
+                            prod_expr *= VarExpr(x[(var,t)])
+                        elif var in S:
+                            prod_expr *= VarExpr(y[(var,t)])
+                        else:
+                            prod_expr *= VarExpr(v[(var,t)])              
+                    if len(variables) > 1:
+                        d[("Temp",c_index,t_index,t)] = model.addVar("cons_temp_" + str(c_index) + "_" + str(t_index) + "_" + str(t))
+                        model.addCons(prod_expr == d[("Temp",c_index,t_index,t)])
                         
-                    con_expr += float(coef) * d[("Temp",c_index,t_index,t)]
-                else:
-                    con_expr += float(coef) * prod_expr
-                empty = False
+                        con_expr += float(coef) * d[("Temp",c_index,t_index,t)]
+                    else:
+                        con_expr += float(coef) * prod_expr
+                    empty = False
                                 
             if not empty:
                 #print(con_expr)
@@ -448,38 +462,46 @@ def encode_global_temporal_constraints(model, A, S, Aux, x, y, v, d, temporal_co
     return model, d, v, Aux
 
 def encode_transitions(model, A, S, Aux, x, y, v, d, transitions, horizon): #variables for each i) nonlinear term and ii) boolean expression
-    
     for t in range(horizon):
         for tran_index, transition in enumerate(transitions):
             tran_expr = SumExpr()
-            #print(transition[0][:-1])
+            #print("transition y: ",y)
             tran_expr += VarExpr(y[(transition[0][:-1],t+1)])
-            
             terms = transition[1:-2]
+            print("terms1: ", terms)
             #empty = True
             for t_index, term in enumerate(terms):
                 coef = "1.0"
+                #print("term: ", term)
                 variables = term.split("*")
                 if variables[0] not in A + S + Aux:
+                    #print("variable1: ", variables)
                     coef = variables[0]
                     variables = variables[1:]
-                prod_expr = ProdExpr()
-                for var in variables:
-                    if var in A:
-                        prod_expr *= VarExpr(x[(var,t)])
-                    elif var in S:
-                        prod_expr *= VarExpr(y[(var,t)])
-                    else:
-                        prod_expr *= VarExpr(v[(var,t)])
+                    #print("variable2: ", variables)
+
+
+                if set(A).isdisjoint(variables) or t < horizon:
+                    prod_expr = ProdExpr()
+                    for var in variables:
+                        if var in A:
+                            prod_expr *= VarExpr(x[(var,t)])
+                        elif var in S:
+                            prod_expr *= VarExpr(y[(var,t)])
+                        else:
+                            print(var,t)
+                            print(v)
+                            prod_expr *= VarExpr(v[(var,t)])
                 
-                if len(variables) > 1:
-                    d[("Tran",tran_index,t_index,t)] = model.addVar("tran_" + str(tran_index) + "_" + str(t_index) + "_" + str(t), vtype="C", lb = None, ub = None)
-                    model.addCons(prod_expr == d[("Tran",tran_index,t_index,t)])
-                        
-                    tran_expr += float(coef) * d[("Tran",tran_index,t_index,t)]
-                else:
-                    tran_expr += float(coef) * prod_expr
-                #empty = False
+                    if len(variables) > 1:
+                        d[("Tran",tran_index,t_index,t)] = model.addVar("tran_" + str(tran_index) + "_" + str(t_index) + "_" + str(t))
+                        model.addCons(prod_expr == d[("Tran",tran_index,t_index,t)])
+                        #print(variables)
+                        #print(coef)
+                        tran_expr += float(coef) * d[("Tran",tran_index,t_index,t)]
+                    else:
+                        tran_expr += float(coef) * prod_expr
+                    #empty = False
                                 
             #if not empty:
                 #print(con_expr)
@@ -492,7 +514,8 @@ def encode_transitions(model, A, S, Aux, x, y, v, d, transitions, horizon): #var
 
     return model, d
 
-def encode_goal_constraints(model, S, Aux, y, v, d, goals, horizon): #variables for each i) nonlinear term and ii) boolean expression
+def encode_goal_constraints(model, S, Aux, y, v, d, goals, horizon): 
+    #variables for each i) nonlinear term and ii) boolean expression
     
     for g_index, goal in enumerate(goals):
         terms = goal[:-2]
@@ -512,7 +535,7 @@ def encode_goal_constraints(model, S, Aux, y, v, d, goals, horizon): #variables 
                     prod_expr *= VarExpr(v[(var,horizon)])
     
             if len(variables) > 1:
-                d[(g_index,t_index,horizon)] = model.addVar("goal_" + str(g_index) + "_" + str(t_index) + "_" + str(horizon), vtype="C", lb = None, ub = None)
+                d[(g_index,t_index,horizon)] = model.addVar("goal_" + str(g_index) + "_" + str(t_index) + "_" + str(horizon))
                 model.addCons(prod_expr == d[(g_index,t_index,horizon)])
                     
                 sum_expr += float(coef) * d[(g_index,t_index,horizon)]
@@ -536,25 +559,27 @@ def encode_reward(model, A, S, Aux, x, y, v, d, reward, horizon):
     sum_expr = Expr()
     empty = True
     for t in range(horizon):
+        #print("reward: ", reward)
         for t_index, term in enumerate(reward[0]):
             coef = "1.0"
             variables = term.split("*")
             if variables[0] not in A + S + Aux:
                 coef = variables[0]
                 variables = variables[1:]
-            prod_expr = ProdExpr()
-            for var in variables:
-                if var in A:
-                    prod_expr *= VarExpr(x[(var,t)])
-                elif var in S:
-                    prod_expr *= VarExpr(y[(var,t)])
-                else:
-                    prod_expr *= VarExpr(v[(var,t)])
+            if set(A).isdisjoint(variables) or t < horizon:
+                prod_expr = ProdExpr()
+                for var in variables:
+                    if var in A:
+                        prod_expr *= VarExpr(x[(var,t)])
+                    elif var in S:
+                        prod_expr *= VarExpr(y[(var,t)])
+                    else:
+                        prod_expr *= VarExpr(v[(var,t)])
             
-            d[(t_index,t)] = model.addVar("rew_" + str(t_index) + "_" + str(t), vtype="C", lb = None, ub = None)
-            model.addCons(prod_expr == d[(t_index,t)])
-            sum_expr += float(coef) * d[(t_index,t)]
-            empty = False
+                d[(t_index,t)] = model.addVar("rew_" + str(t_index) + "_" + str(t))
+                model.addCons(prod_expr == d[(t_index,t)])
+                sum_expr += float(coef) * d[(t_index,t)]
+                empty = False
         
     if not empty:
         #print(sum_expr)
@@ -606,19 +631,19 @@ if __name__ == '__main__':
     if setDomain and setInstance:
         if not setEpsilon:
             epsilon = "0.01"
-            print 'Epsilon is not provided, and is set to 0.01.'
+            print('Epsilon is not provided, and is set to 0.01.')
         if not setHorizon:
             horizon = "1"
-            print 'Horizon is not provided, and is set to 1.'
+            print('Horizon is not provided, and is set to 1.')
         if not setGap:
             gap = "0.001"
-            print 'Optimality gap is not provided, and is set to 0.001.'
+            print('Optimality gap is not provided, and is set to 0.001.')
         import time
         start_time = time.time()
         while not encode_scipplan(domain, instance, int(horizon), float(epsilon), float(gap)) and not setHorizon:
             horizon = str(int(horizon) + 1)
-        print 'Total Time: %.4f seconds' % (time.time() - start_time)
+        print('Total Time: %.4f seconds' % (time.time() - start_time))
     elif not setDomain:
-        print 'Domain is not provided.'
+        print('Domain is not provided.')
     else:
-        print 'Instance is not provided.'
+        print('Instance is not provided.')
